@@ -57,6 +57,8 @@ impl UsbCdcDevice {
         self.handle
             .set_alternate_setting(self.interface, self.setting)?;
 
+        self.handle.reset()?;
+
         Ok(())
     }
 
