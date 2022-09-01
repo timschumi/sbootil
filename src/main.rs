@@ -1,6 +1,8 @@
 mod device;
 
 use clap::{arg, Command};
+use std::fs::File;
+use std::io::{Read, Write};
 use std::num::ParseIntError;
 use std::time::Duration;
 use usb_ids::FromId;
@@ -25,11 +27,32 @@ fn cli() -> Command<'static> {
                 .arg_required_else_help(true)
                 .subcommand(Command::new("reboot").about("Reboot the device")),
         )
+        .subcommand(
+            Command::new("bootstub")
+                .about("Talking to bootstub")
+                .subcommand_required(true)
+                .arg_required_else_help(true)
+                .subcommand(
+                    Command::new("dump")
+                        .about("Dump memory from the device")
+                        .arg(arg!(<start> "The start address"))
+                        .arg(arg!(<end> "The end address"))
+                        .arg(arg!(<output> "The output file")),
+                ),
+        )
         .arg(arg!(--device <ID> "The vendor and device ID to communicate with").required(false))
 }
 
 fn parse_id(string: &str) -> Result<u16, ParseIntError> {
     u16::from_str_radix(string, 16)
+}
+
+fn parse_u64(string: &str) -> Result<u64, ParseIntError> {
+    if string.starts_with("0x") || string.starts_with("0X") {
+        Ok(u64::from_str_radix(&string[2..], 16))?
+    } else {
+        Ok(u64::from_str_radix(string, 10))?
+    }
 }
 
 fn list_devices(vendor_id: u16) {
@@ -76,6 +99,113 @@ fn main() {
             };
 
             list_devices(vendor_id);
+            return;
+        }
+        Some(("bootstub", sub_matches)) => {
+            let device_path = matches.value_of("device").unwrap();
+            let mut device = File::options()
+                .read(true)
+                .write(true)
+                .open(device_path)
+                .unwrap();
+
+            // Try the handshake.
+            device
+                .write(&[b'W', b'H', b'O', b'I', b'S', b'D', b'I', b'S'])
+                .unwrap();
+            let mut buf = [0u8; 16 * 1024];
+            let handshake_end_offset = device.read(&mut buf).unwrap();
+            let mut handshake_response = [0u8; 8];
+            handshake_response
+                .clone_from_slice(&buf[handshake_end_offset - 8..handshake_end_offset]);
+            assert_eq!(
+                handshake_response,
+                [b'B', b'O', b'O', b'T', b'S', b'T', b'U', b'B'],
+                "Protocol hello response not as expected: {:?}",
+                handshake_response
+            );
+
+            match sub_matches.subcommand() {
+                Some(("dump", sub_matches)) => {
+                    let start_address_str = sub_matches.value_of("start").unwrap();
+                    let end_address_str = sub_matches.value_of("end").unwrap();
+                    let output_path = sub_matches.value_of("output").unwrap();
+
+                    let start_address = parse_u64(start_address_str).unwrap();
+                    let end_address = parse_u64(end_address_str).unwrap();
+
+                    let mut output = File::options()
+                        .write(true)
+                        .create(true)
+                        .truncate(true)
+                        .open(output_path)
+                        .unwrap();
+
+                    device
+                        .write(&[b'U', b'P', b'L', b'D', b'M', b'E', b'M'])
+                        .unwrap();
+                    std::thread::sleep(Duration::from_millis(100));
+                    device.write(start_address_str.as_bytes()).unwrap();
+                    std::thread::sleep(Duration::from_millis(100));
+                    device.write(end_address_str.as_bytes()).unwrap();
+                    std::thread::sleep(Duration::from_millis(100));
+
+                    // Ensure that the device accepted the upload.
+                    let mut buf = [0u8; 8];
+                    device.read(&mut buf).unwrap();
+                    assert_eq!(
+                        buf[0..8],
+                        [b'S', b'T', b'R', b'T', b'U', b'P', b'L', b'D'],
+                        "Upload start response not as expected: {:?}",
+                        buf
+                    );
+
+                    let mut remaining = end_address - start_address;
+                    let mut checksum = 0u8;
+
+                    while remaining > 0 {
+                        let mut value_enc = [0u8; 2];
+                        device.read(&mut value_enc).unwrap();
+
+                        // FIXME: Pick a better encoding (or get UART to ignore control characters).
+                        value_enc[0] = value_enc[0] - 0x20;
+                        value_enc[1] = (value_enc[1] - 0x20) << 4;
+
+                        let value = [value_enc[1] | value_enc[0]];
+
+                        checksum ^= value[0];
+
+                        output.write(&value).unwrap();
+
+                        remaining -= 1;
+                    }
+
+                    // Check the checksum.
+                    let mut checksum_enc = [0u8; 2];
+                    device.read(&mut checksum_enc).unwrap();
+
+                    checksum_enc[0] = checksum_enc[0] - 0x20;
+                    checksum_enc[1] = (checksum_enc[1] - 0x20) << 4;
+
+                    checksum ^= checksum_enc[1] | checksum_enc[0];
+
+                    if checksum != 0 {
+                        println!("Checksum does not match: {:#02x}", checksum);
+                    }
+
+                    // Check end of transfer.
+                    let mut buf = [0u8; 7];
+                    device.read(&mut buf).unwrap();
+                    assert_eq!(
+                        buf[0..7],
+                        [b'E', b'N', b'D', b'U', b'P', b'L', b'D'],
+                        "Upload end response not as expected: {:?}",
+                        buf
+                    );
+                }
+                _ => unreachable!(),
+            }
+
             return;
         }
         _ => {}
