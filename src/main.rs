@@ -13,7 +13,7 @@ fn cli() -> Command<'static> {
             Command::new("list-devices")
                 .about("Lists all connected USB devices")
                 .arg(
-                    arg!(<ID> "The vendor ID to filter for")
+                    arg!(<id> "The vendor ID to filter for")
                         .required(false)
                         .default_value(&"04e8"),
                 ),
@@ -68,7 +68,7 @@ fn main() {
 
     match matches.subcommand() {
         Some(("list-devices", sub_matches)) => {
-            let vendor_id = match parse_id(sub_matches.get_one::<String>("ID").unwrap()) {
+            let vendor_id = match parse_id(sub_matches.get_one::<String>("id").unwrap()) {
                 Ok(vendor_id) => vendor_id,
                 Err(_) => {
                     panic!("Invalid vendor ID")
