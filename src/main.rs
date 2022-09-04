@@ -162,32 +162,31 @@ fn main() {
 
                     let mut remaining = end_address - start_address;
                     let mut checksum = 0u8;
+                    let mut bit_count = 0;
+                    let mut sliding_window = 0u16;
 
-                    while remaining > 0 {
-                        let mut value_enc = [0u8; 2];
-                        device.read(&mut value_enc).unwrap();
+                    loop {
+                        while bit_count < 8 {
+                            let mut value = [0u8; 1];
+                            device.read(&mut value).unwrap();
 
-                        // FIXME: Pick a better encoding (or get UART to ignore control characters).
-                        value_enc[0] = value_enc[0] - 0x20;
-                        value_enc[1] = (value_enc[1] - 0x20) << 4;
+                            sliding_window = (sliding_window << 7) | (value[0] & 0b1111111) as u16;
+                            bit_count += 7;
+                        }
 
-                        let value = [value_enc[1] | value_enc[0]];
+                        let value = ((sliding_window >> (bit_count - 8)) & 0xff) as u8;
+                        bit_count -= 8;
 
-                        checksum ^= value[0];
+                        checksum ^= value;
 
-                        output.write(&value).unwrap();
+                        if remaining > 0 {
+                            output.write(&[value]).unwrap();
+                        } else {
+                            break;
+                        }
 
                         remaining -= 1;
                     }
-
-                    // Check the checksum.
-                    let mut checksum_enc = [0u8; 2];
-                    device.read(&mut checksum_enc).unwrap();
-
-                    checksum_enc[0] = checksum_enc[0] - 0x20;
-                    checksum_enc[1] = (checksum_enc[1] - 0x20) << 4;
-
-                    checksum ^= checksum_enc[1] | checksum_enc[0];
 
                     if checksum != 0 {
                         println!("Checksum does not match: {:#02x}", checksum);
