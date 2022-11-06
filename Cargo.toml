@@ -6,4 +6,5 @@ edition = "2021"
 [dependencies]
 clap = "3.2"
 rusb = "0.9"
+termios = "0.3"
 usb-ids = "0.2"

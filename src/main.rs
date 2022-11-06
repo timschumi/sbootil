@@ -4,7 +4,13 @@ use clap::{arg, Command};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::num::ParseIntError;
+use std::os::unix::io::AsRawFd;
 use std::time::Duration;
+use termios::os::target::B115200;
+use termios::{
+    cfsetspeed, tcflush, tcsetattr, Termios, BRKINT, CS8, CSIZE, ECHO, ECHONL, ICANON, ICRNL,
+    IEXTEN, IGNBRK, IGNCR, INLCR, ISIG, ISTRIP, IXON, OPOST, PARENB, PARMRK, TCIOFLUSH, TCSANOW,
+};
 use usb_ids::FromId;
 
 fn cli() -> Command<'static> {
@@ -108,6 +114,21 @@ fn main() {
                 .write(true)
                 .open(device_path)
                 .unwrap();
+
+            let fd = device.as_raw_fd();
+            let mut termios = Termios::from_fd(fd).unwrap();
+
+            cfsetspeed(&mut termios, B115200).unwrap();
+
+            // Set options for "raw" mode (similar to cfmakeraw).
+            termios.c_iflag &= !(IGNBRK | BRKINT | PARMRK | ISTRIP | INLCR | IGNCR | ICRNL | IXON);
+            termios.c_oflag &= !(OPOST);
+            termios.c_lflag &= !(ECHO | ECHONL | ICANON | ISIG | IEXTEN);
+            termios.c_cflag &= !(CSIZE | PARENB);
+            termios.c_cflag |= CS8;
+
+            tcsetattr(fd, TCSANOW, &termios).unwrap();
+            tcflush(fd, TCIOFLUSH).unwrap();
 
             // Try the handshake.
             device
