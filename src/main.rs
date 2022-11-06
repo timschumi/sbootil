@@ -183,25 +183,14 @@ fn main() {
 
                     let mut remaining = end_address - start_address;
                     let mut checksum = 0u8;
-                    let mut bit_count = 0;
-                    let mut sliding_window = 0u16;
 
                     loop {
-                        while bit_count < 8 {
-                            let mut value = [0u8; 1];
-                            device.read(&mut value).unwrap();
-
-                            sliding_window = (sliding_window << 7) | (value[0] & 0b1111111) as u16;
-                            bit_count += 7;
-                        }
-
-                        let value = ((sliding_window >> (bit_count - 8)) & 0xff) as u8;
-                        bit_count -= 8;
-
-                        checksum ^= value;
+                        let mut value = [0u8; 1];
+                        device.read(&mut value).unwrap();
+                        checksum ^= value[0];
 
                         if remaining > 0 {
-                            output.write(&[value]).unwrap();
+                            output.write(&value).unwrap();
                         } else {
                             break;
                         }
