@@ -44,6 +44,11 @@ fn cli() -> Command<'static> {
                         .arg(arg!(<start> "The start address"))
                         .arg(arg!(<end> "The end address"))
                         .arg(arg!(<output> "The output file")),
+                )
+                .subcommand(
+                    Command::new("boot")
+                        .about("Boot a raw binary on the device")
+                        .arg(arg!(<binary> "The binary file")),
                 ),
         )
         .arg(arg!(--device <ID> "The vendor and device ID to communicate with").required(false))
@@ -211,6 +216,71 @@ fn main() {
                         "Upload end response not as expected: {:?}",
                         buf
                     );
+                }
+                Some(("boot", sub_matches)) => {
+                    let binary_path = sub_matches.value_of("binary").unwrap();
+
+                    let mut binary = File::options()
+                        .read(true)
+                        .write(false)
+                        .create(false)
+                        .truncate(false)
+                        .open(binary_path)
+                        .unwrap();
+                    let mut binary_size = binary.metadata().unwrap().len();
+
+                    device
+                        .write(&[b'B', b'O', b'O', b'T', b'F', b'I', b'L', b'E'])
+                        .unwrap();
+                    std::thread::sleep(Duration::from_millis(100));
+                    device.write(format!("{:#x}", binary_size).as_bytes()).unwrap();
+                    std::thread::sleep(Duration::from_millis(100));
+
+                    // Ensure that the device accepted the upload.
+                    let mut buf = [0u8; 8];
+                    device.read(&mut buf).unwrap();
+                    assert_eq!(
+                        buf[0..8],
+                        [b'S', b'T', b'R', b'T', b'U', b'P', b'L', b'D'],
+                        "Upload start response not as expected: {:?}",
+                        buf
+                    );
+
+                    loop {
+                        let mut value = [0u8; 1];
+                        binary.read(&mut value).unwrap();
+                        device.write(&value).unwrap();
+
+                        if binary_size % 256 == 0 {
+                            // Ensure that the same byte is sent back to confirm that it was received.
+                            let mut returned_value = [0u8; 1];
+                            device.read(&mut returned_value).unwrap();
+
+                            assert_eq!(value[0], returned_value[0], "Device did not echo back the correct byte");
+                        }
+
+                        binary_size -= 1;
+
+                        if binary_size == 0 {
+                            break;
+                        }
+                    }
+
+                    // Check end of transfer.
+                    let mut buf = [0u8; 7];
+                    device.read(&mut buf).unwrap();
+                    assert_eq!(
+                        buf[0..7],
+                        [b'E', b'N', b'D', b'U', b'P', b'L', b'D'],
+                        "Upload end response not as expected: {:?}",
+                        buf
+                    );
+
+                    loop {
+                        let mut value = [0u8; 1];
+                        device.read(&mut value).unwrap();
+                        print!("{}", value[0] as char);
+                    }
                 }
                 _ => unreachable!(),
             }
